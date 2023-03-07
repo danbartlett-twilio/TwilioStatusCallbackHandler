@@ -1,0 +1,137 @@
+openapi: "3.0.1"
+info:
+  title: "Queue Based Leveling Example"
+  version: "2021-03-31 17:32:29UTC"
+paths:
+  ############################################
+  # Path has no query string parameters
+  ############################################
+  /twilio:
+    post:
+      responses:
+        default:
+          description: "Response for POST /"
+      x-amazon-apigateway-integration:
+        type: "aws_proxy"
+        integrationSubtype: "SQS-SendMessage"
+        credentials:
+          Fn::GetAtt: [TwilioStatusCallbackApiRole, Arn]
+        connectionType: "INTERNET"
+        payloadFormatVersion: "1.0"
+        requestParameters:
+          MessageBody: "$request.body"
+          MessageAttributes: >-
+            {
+              "x-twilio-signature": {
+                "DataType": "String",
+                "StringValue": "${request.header.x-twilio-signature}"
+              },
+              "sourceIp": {
+                "DataType": "String",
+                "StringValue": "${context.identity.sourceIp}"
+              }    
+              ,
+              "domainName": {
+                "DataType": "String",
+                "StringValue": "${context.domainName}"
+              }                     
+              ,
+              "path": {
+                "DataType": "String",
+                "StringValue": "${context.path}"
+              }   
+              ,
+              "queryStringParams": {
+                "DataType": "String",
+                "StringValue": "no"
+              }                                   
+                                                 
+            }          
+          QueueUrl:
+            Ref: TwilioStatusCallbackQueue
+  ############################################
+  # Path has one query string parameters (id)
+  # Edit MessageAttributes to change the 
+  # param and/or add addition params.
+  # Corresponding changes would need to be
+  # made in the Lambda function that parses
+  # messages from SQS.
+  ############################################  
+  /twilio-params:
+    post:
+      responses:
+        default:
+          description: "Response for POST /"
+      x-amazon-apigateway-integration:
+        type: "aws_proxy"
+        integrationSubtype: "SQS-SendMessage"
+        credentials:
+          Fn::GetAtt: [TwilioStatusCallbackApiRole, Arn]
+        connectionType: "INTERNET"
+        payloadFormatVersion: "1.0"
+        requestParameters:
+          MessageBody: "$request.body"
+          ############################################
+          # queryStringParams set to true which means
+          # querystring params MUST be included in 
+          # the call or the request will FAIL.
+          # paramsArray contains | (pipe) delimited
+          # string of params that will be present in
+          # the request. Each param must be configured
+          # as a MessageAttribute in section below.
+          # URLs are reconstructed so the order of the
+          # params MUST match or request will FAIL.
+          ############################################            
+          MessageAttributes: >-
+            {
+              "x-twilio-signature": {
+                "DataType": "String",
+                "StringValue": "${request.header.x-twilio-signature}"
+              },
+              "sourceIp": {
+                "DataType": "String",
+                "StringValue": "${context.identity.sourceIp}"
+              }   
+              ,
+              "domainName": {
+                "DataType": "String",
+                "StringValue": "${context.domainName}"
+              }                     
+              ,
+              "path": {
+                "DataType": "String",
+                "StringValue": "${context.path}"
+              }                     
+              ,
+              "queryStringParams": {
+                "DataType": "String",
+                "StringValue": "yes"
+              }
+              ,
+              "paramsArray": {
+                "DataType": "String",
+                "StringValue": "id|category"
+              }                 
+              ,
+              "id": {
+                "DataType": "String",
+                "StringValue": "${request.querystring.id}"
+              }                                                                                        
+              ,
+              "category": {
+                "DataType": "String",
+                "StringValue": "${request.querystring.category}"
+              }                                                                                        
+
+            }          
+          QueueUrl:
+            Ref: TwilioStatusCallbackQueue
+
+x-amazon-apigateway-cors:
+  allowMethods:
+  - "*"
+  maxAge: 0
+  allowCredentials: false
+  allowOrigins:
+  - "*"
+x-amazon-apigateway-importexport-version: "1.0"

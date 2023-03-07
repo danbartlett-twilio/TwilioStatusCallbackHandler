@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SaveStatusCallbackToS3
+
+  Creates an S3 bucket, and lambda subscribed to SNS topic to receive messages and then write them to S3 bucket.
+  
+Globals:
+  Function:
+    Timeout: 3
+
+Resources:
+
+  ##########################################################################
+  #  S3 Bucket
+  #                          
+  #  Bucket to store all status callbacks.
+  ########################################################################## 
+  TwilioStatusCallbackBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "twilio-statuscallbacks-${AWS::AccountId}-${AWS::Region}"  
+  TwilioStatusCallbackBucketPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref TwilioStatusCallbackBucket
+                - /*     
+
+  ##########################################################################
+  #  Policy
+  #                          
+  #  Provide permission for SNS to invoke the Lambda function
+  ########################################################################## 
+  SNStoTwilioWriteToS3FunctionPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref TwilioWriteToS3Function
+      Principal: sns.amazonaws.com
+
+  ##########################################################################
+  #  Lambda Function                            
+  #                          
+  #  This function receives messages from SNS topic and writes json
+  #  file to S3 bucket.
+  ##########################################################################
+  TwilioWriteToS3Function:
+    Type: AWS::Serverless::Function
+    Properties:      
+      Description: Lambda invoked by SNS topics, writes to DynamoDB
+      CodeUri: lambdas/save-to-s3/
+      Handler: app.lambdaHandler
+      AutoPublishAlias: live
+      Runtime: nodejs18.x
+      Architectures:
+        - arm64
+      Role: !GetAtt TwilioWriteToS3FunctionRole.Arn
+      Timeout: 3
+      MemorySize: 128
+      Environment:
+        Variables:
+          REGION: !Ref "AWS::Region"
+          DestinationBucket: !Sub "twilio-statuscallbacks-${AWS::AccountId}-${AWS::Region}"         
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic: !ImportValue 'TwilioStatusCallbackTopicARN'
+
+  ##########################################################################
+  #  Role for Lambda Function                            
+  #                          
+  #  Allow lambda function to write to S3 bucket.
+  ##########################################################################
+  TwilioWriteToS3FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole    
+      ManagedPolicyArns:        
+        - !Ref TwilioStatusCallbackBucketPolicy
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole

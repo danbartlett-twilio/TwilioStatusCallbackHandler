@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  CheckForStatusCallbackErrors
+
+  Lambda checks SNS messages for errors and if present send to EventBus for further processing.
+
+Resources:
+
+  ##########################################################################
+  #  Policy
+  #                          
+  #  Provide permission for SNS to invoke the Lambda function
+  ########################################################################## 
+  SNStoTwilioCheckForErrorsFunctionPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref TwilioCheckForErrorsFunction
+      Principal: sns.amazonaws.com
+
+  ##########################################################################
+  #  EventBridge EventBus
+  #                          
+  #  Custom EventBus to process error codes
+  ########################################################################## 
+  TwilioStatusCallbackErrorsEventBus:                
+    Type: AWS::Events::EventBus
+    Properties:       
+      Name: TwilioStatusCallbackErrorsEventBus
+
+  ##########################################################################
+  #  Policy
+  #                          
+  #  Managed IAM Policy to access EventBus (allow Lambda to PUT events
+  #  on the eventbus).
+  ########################################################################## 
+  TwilioStatusCallbackErrorsEventBusPutPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - events:PutEvents 
+            Resource: !GetAtt TwilioStatusCallbackErrorsEventBus.Arn
+
+
+
+  ##########################################################################
+  #  (TwilioCheckForErrorsFunction) Lambda Function                            
+  #                          
+  #  This function receives messages messages from SNS and if errors are
+  #  present, send them to event bus
+  ##########################################################################
+  TwilioCheckForErrorsFunction:
+    Type: AWS::Serverless::Function
+    Properties:      
+      Description: Lambda invoked by SNS topics, checks for errors, sends to event bus
+      CodeUri: lambdas/check-for-errors/
+      Handler: app.lambdaHandler
+      AutoPublishAlias: live
+      Runtime: nodejs18.x
+      Architectures:
+        - arm64
+      Role: !GetAtt TwilioCheckForErrorsFunctionRole.Arn
+      Timeout: 3
+      MemorySize: 128
+      Environment:
+        Variables:
+          REGION: !Ref "AWS::Region"
+          EVENTBUS_NAME: !Ref TwilioStatusCallbackErrorsEventBus
+          EVENT_SOURCE_NAME: 'custom.twilioStatusCallbackErrors'
+          EVENT_DETAIL_TYPE: 'errormessage'                 
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic: !ImportValue 'TwilioStatusCallbackTopicARN'
+
+  ##########################################################################
+  #  Role for Lambda Function                            
+  #                          
+  #  Allow lambda function to write to event bus.
+  ##########################################################################
+  TwilioCheckForErrorsFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole    
+      ManagedPolicyArns:        
+        - !Ref TwilioStatusCallbackErrorsEventBusPutPolicy
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  ##########################################################################
+  #  (ErrorCode30004Function) Lambda Function & Role
+  #                          
+  #  Invoked by eventbus with error 30004. Stub for further processing.
+  ##########################################################################
+  ErrorCode30004Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/error-code-30004/
+      Handler: app.lambdaHandler
+      Runtime: nodejs18.x
+      Role: !GetAtt ErrorCode30004FunctionRole.Arn 
+      Events:
+        Trigger:
+          Type: CloudWatchEvent 
+          Properties:
+            EventBusName: !Ref TwilioStatusCallbackErrorsEventBus
+            Pattern:
+              source:
+                - custom.twilioStatusCallbackErrors
+              detail-type:
+                - errormessage                      
+              detail:
+                ErrorCode:                  
+                  - "30004"
+      Environment:  
+        Variables:          
+          EVENTBUS_NAME: !Ref TwilioStatusCallbackErrorsEventBus
+          EVENT_SOURCE_NAME: 'custom.twilioStatusCallbackErrors'
+          EVENT_DETAIL_TYPE: 'errormessage'    
+  ErrorCode30004FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole    
+      ManagedPolicyArns:        
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole   
+
+  ##########################################################################
+  #  (ErrorCode30006Function) Lambda Function & Role
+  #                          
+  #  Invoked by eventbus with error 30006. Stub for further processing.
+  ##########################################################################
+  ErrorCode30006Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/error-code-30006/
+      Handler: app.lambdaHandler
+      Runtime: nodejs18.x
+      Role: !GetAtt ErrorCode30006FunctionRole.Arn 
+      Events:
+        Trigger:
+          Type: CloudWatchEvent 
+          Properties:
+            EventBusName: !Ref TwilioStatusCallbackErrorsEventBus
+            Pattern:
+              source:
+                - custom.twilioStatusCallbackErrors
+              detail-type:
+                - errormessage                      
+              detail:
+                ErrorCode:                  
+                  - "30006"
+      Environment:  
+        Variables:          
+          EVENTBUS_NAME: !Ref TwilioStatusCallbackErrorsEventBus
+          EVENT_SOURCE_NAME: 'custom.twilioStatusCallbackErrors'
+          EVENT_DETAIL_TYPE: 'errormessage'    
+  ErrorCode30006FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole    
+      ManagedPolicyArns:        
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole        
+
+  ##########################################################################
+  #  (ErrorCode30007Function) Lambda Function & Role
+  #                          
+  #  Invoked by eventbus with error 30007. Stub for further processing.
+  ##########################################################################
+  ErrorCode30007Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/error-code-30007/
+      Handler: app.lambdaHandler
+      Runtime: nodejs18.x
+      Role: !GetAtt ErrorCode30007FunctionRole.Arn 
+      Events:
+        Trigger:
+          Type: CloudWatchEvent 
+          Properties:
+            EventBusName: !Ref TwilioStatusCallbackErrorsEventBus
+            Pattern:
+              source:
+                - custom.twilioStatusCallbackErrors
+              detail-type:
+                - errormessage                      
+              detail:
+                ErrorCode:                  
+                  - "30007"
+      Environment:  
+        Variables:          
+          EVENTBUS_NAME: !Ref TwilioStatusCallbackErrorsEventBus
+          EVENT_SOURCE_NAME: 'custom.twilioStatusCallbackErrors'
+          EVENT_DETAIL_TYPE: 'errormessage'    
+  ErrorCode30007FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole    
+      ManagedPolicyArns:        
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole           

@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: This stack contains a Lambda function triggered by an AWS API Gateway HTTP APIs call through an Amazon SQS Queue for buffering
+
+Resources:
+
+  ##########################################################################
+  #  SQS Queue                 
+  #
+  #  This queue holds for processing and POST requests sent from Twilio.
+  #  The queue handles spikey traffic so that the downstream functions are
+  #  not overrun by spikey traffic.
+  ##########################################################################
+  TwilioStatusCallbackQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: TwilioStatusCallbackQueue
+
+  ##########################################################################
+  #  SNS Topic                 
+  #
+  #  SQS Messages passing security check get sent to SNS Topic to fan out
+  #  for additional processing by any topic subscribers. 
+  ##########################################################################
+  TwilioStatusCallbackTopic:
+    Type: AWS::SNS::Topic
+
+  ##########################################################################
+  #  HTTP API                                                             
+  #
+  #  This api receives POST Status Callback requests from Twilio and
+  #  sends them directly to an SQS queue for processed. 
+  ##########################################################################
+  TwilioStatusCallbackApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      AccessLogSettings:
+        DestinationArn: !GetAtt TwilioStatusCallbackApiLogs.Arn
+        Format: '{ "requestId":"$context.requestId", "ip": "$context.identity.sourceIp", "requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod","routeKey":"$context.routeKey", "status":"$context.status","protocol":"$context.protocol", "responseLength":"$context.responseLength" }'
+      # This points to a separate yaml file!
+      DefinitionBody:
+        'Fn::Transform':
+          Name: 'AWS::Include'
+          Parameters:
+            Location: 'api.yaml'
+      StageVariables:
+        AUTH_LEVEL: 'PRIVATE'
+
+  ##########################################################################
+  #  Lambda Layers
+  #                          
+  #  Key code snippets separated in Lambda layers to simplify code and
+  #  allow for reuse.
+  ##########################################################################
+  CalculateTwilioSignatureLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: CalculateTwilioSignature
+      Description: Calculate x-twilio-signature from parameters
+      ContentUri: layers/calculate-twilio-signature/
+      CompatibleRuntimes:
+        - nodejs18.x
+      LicenseInfo: 'MIT'
+      RetentionPolicy: Retain
+  CryptoLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: CryptoLayer
+      Description: Used for cryptographic functionality
+      ContentUri: layers/layer-crypto/
+      CompatibleRuntimes:
+        - nodejs18.x
+      LicenseInfo: 'MIT'
+      RetentionPolicy: Retain      
+
+  ##########################################################################
+  #  Lambda Function                            
+  #                          
+  #  This function receives messages from SQS queue, checks the x-twilio-sig
+  #  and, if matches, publishes to an SNS topic. 
+  ##########################################################################
+  TwilioQueueLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:      
+      Description: Lambda to be invoked by the SQS Queue
+      CodeUri: lambdas/handle-sqs-messages/
+      Handler: app.lambdaHandler
+      AutoPublishAlias: live
+      Runtime: nodejs18.x
+      Architectures:
+        - arm64
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:          
+          AUTH_TOKEN: '{{resolve:secretsmanager:TwilioStatusCallbackHandler:SecretString:AUTH_TOKEN}}'
+          SNStopic: !Ref TwilioStatusCallbackTopic
+          REGION: !Ref "AWS::Region"
+      Layers:
+        - !Ref CryptoLayer
+        - !Ref CalculateTwilioSignatureLayer
+      Events:
+        TwilioStatusCallbackQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt TwilioStatusCallbackQueue.Arn
+            BatchSize: 3
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt TwilioStatusCallbackTopic.TopicName            
+
+  ##########################################################################
+  # Roles
+  # 
+  # Role allows api gateway (used in api.yaml) to post messages directly
+  # to SQS queue.
+  ##########################################################################
+  TwilioStatusCallbackApiRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - apigateway.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+      - PolicyName: AllowSqsIntegration
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - 'sqs:SendMessage'
+                - 'sqs:GetQueueUrl'
+                - 'sqs:SendMessageBatch'
+              Resource: !GetAtt TwilioStatusCallbackQueue.Arn
+            - Effect: Allow
+              Action:
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:DescribeLogGroups'
+                - 'logs:DescribeLogStreams'
+                - 'logs:PutLogEvents'
+                - 'logs:GetLogEvents'
+                - 'logs:FilterLogEvents'
+              Resource: !GetAtt TwilioStatusCallbackApiLogs.Arn
+
+  ##########################################################################
+  #   Cloudwatch Logs                                                       
+  ##########################################################################
+  TwilioStatusCallbackApiLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: TwilioStatusCallbackApi-Access-Logs
+      RetentionInDays: 1
+
+##########################################################################
+#   Outputs
+##########################################################################
+Outputs:
+  TwilioStatusCallbackApi:
+    Description: "HTTP API endpoint"
+    Value: !Sub "https://${TwilioStatusCallbackApi}.execute-api.${AWS::Region}.amazonaws.com"
+
+  TwilioQueueLambdaFunction:
+    Description: TwilioQueueLambdaFunction function name
+    Value: !Ref TwilioQueueLambdaFunction
+
+  TwilioStatusCallbackQueue:
+    Description: SQS queue ARN
+    Value: !GetAtt TwilioStatusCallbackQueue.Arn
+
+  TwilioStatusCallbackQueueURL:
+    Description: SQS queue URL
+    Value: !Ref TwilioStatusCallbackQueue
+
+  TwilioStatusCallbackTopic:
+    Description: SNS topic name
+    Value: !GetAtt TwilioStatusCallbackTopic.TopicName
+    Export:
+      Name: 'TwilioStatusCallbackTopic'
+
+  TwilioStatusCallbackTopicARN:
+    Description: SNS topic ARN
+    Value: !Ref TwilioStatusCallbackTopic    
+    Export:
+      Name: 'TwilioStatusCallbackTopicARN'    
